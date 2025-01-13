@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
 public class DXMConverter {
 
@@ -15,11 +16,16 @@ public class DXMConverter {
         if (!Files.exists(Path.of(path)))
             throw new RuntimeException("File not found: " + path);
 
+        System.out.println("Loading file: " + path);
+
         DXMModel model = loadDXM(path);
         writeDXMasOBJ(model, path);
+
+        System.out.println("Done! :3");
     }
 
     private static DXMModel loadDXM(String path) throws IOException {
+        System.out.println("## Loading DXM ##");
         boolean dxm = path.toLowerCase().endsWith(".dxm");
         Path dlmPath = Path.of(dxm ? path.substring(0, path.length() - 4) + ".dlm" : path);
 
@@ -34,6 +40,7 @@ public class DXMConverter {
 
         Pair<Integer, Integer> flags = validateHeader(model.header);
 
+        System.out.println("Loading DXM groups...");
         model.groups = new DXMGroup[model.header.groupCount];
         for (int i = 0; i < model.header.groupCount; i++) {
             model.groups[i] = new DXMGroup();
@@ -54,6 +61,7 @@ public class DXMConverter {
         int colcount = (int) model.header.vertexCount * 4 * Byte.BYTES;
 
         //vertex data
+        System.out.println("Loading DXM vertex data...");
         DXMData vertchunk = new DXMData();
         vertchunk.compressedSize = readUnsignedLong(in);
         vertchunk.uncompressedSize = readUnsignedLong(in);
@@ -68,6 +76,7 @@ public class DXMConverter {
         }
 
         //index data
+        System.out.println("Loading DXM index data...");
         DXMData indchunk = new DXMData();
         indchunk.compressedSize = readUnsignedLong(in);
         indchunk.uncompressedSize = readUnsignedLong(in);
@@ -85,6 +94,8 @@ public class DXMConverter {
     }
 
     private static void loadHeader(InputStream in, DXMHeader header) throws IOException {
+        System.out.println("Loading DXM header...");
+
         header.nameCharacter0 = (byte) in.read();
         header.nameCharacter1 = (byte) in.read();
         header.nameCharacter2 = (byte) in.read();
@@ -109,6 +120,8 @@ public class DXMConverter {
     }
 
     private static Pair<Integer, Integer> validateHeader(DXMHeader header) {
+        System.out.println("Validating DXM header...");
+
         int flagMesh = 0, flagPC = 0;
 
         flagMesh |= DXMVertexFlag.Vertex_3_F32.bit;
@@ -143,13 +156,20 @@ public class DXMConverter {
     }
 
     private static void writeDXMasOBJ(DXMModel model, String path) throws IOException {
+        System.out.println("## Converting to OBJ ##");
         String rawPath = path.substring(0, path.length() - 4);
         String srcFolder = rawPath.substring(0, rawPath.lastIndexOf("\\") + 1);
         String filename = rawPath.substring(rawPath.lastIndexOf("\\") + 1);
 
+        System.out.println("Creating OBJ folder...");
         Path folder = Path.of("./", filename);
-        if (!Files.exists(folder))
+        if (!Files.exists(folder)) {
             Files.createDirectory(folder);
+        } else {
+            for (int i = 1; Files.exists(folder); i++)
+                folder = Path.of("./", filename + " (" + i + ")");
+            Files.createDirectory(folder);
+        }
 
         StringBuilder obj = new StringBuilder();
         StringBuilder mtl = new StringBuilder();
@@ -163,17 +183,26 @@ public class DXMConverter {
         obj.append("mtllib %s\n".formatted(filename + ".mtl"));
         obj.append("o %s\n".formatted(filename));
 
+        boolean normals = model.normal != null;
+        boolean uvs = model.uv != null;
+
+        System.out.println("Writing OBJ vertices...");
         for (int i = 0; i < model.vertex.length; i += 3)
-            obj.append("v %f %f %f\n".formatted(model.vertex[i], model.vertex[i + 1], model.vertex[i + 2]));
+            obj.append(String.format(Locale.US, "v %f %f %f\n", model.vertex[i], model.vertex[i + 1], model.vertex[i + 2]));
 
-        if (model.normal != null)
+        if (normals) {
+            System.out.println("Writing OBJ normals...");
             for (int i = 0; i < model.normal.length; i += 3)
-                obj.append("vn %f %f %f\n".formatted(model.normal[i], model.normal[i + 1], model.normal[i + 2]));
+                obj.append(String.format(Locale.US, "vn %f %f %f\n", model.normal[i], model.normal[i + 1], model.normal[i + 2]));
+        }
 
-        if (model.uv != null)
+        if (uvs) {
+            System.out.println("Writing OBJ UVs...");
             for (int i = 0; i < model.uv.length; i += 2)
-                obj.append("vt %f %f\n".formatted(model.uv[i], model.uv[i + 1]));
+                obj.append(String.format(Locale.US, "vt %f %f\n", model.uv[i], model.uv[i + 1]));
+        }
 
+        System.out.println("Writing OBJ groups and faces...");
         for (DXMGroup group : model.groups) {
             if (group.texture != null) {
                 Path texPath = Path.of(srcFolder, group.texture);
@@ -185,30 +214,19 @@ public class DXMConverter {
 
             obj.append("usemtl %s\n".formatted(group.texture));
 
-            if (group.index16 != null) {
-                for (int i = 0; i < group.index16.length; i += 3) {
-                    obj.append("f %d/%d/%d %d/%d/%d %d/%d/%d\n".formatted(
-                            group.index16[i] + 1, group.index16[i] + 1, group.index16[i] + 1,
-                            group.index16[i + 1] + 1, group.index16[i + 1] + 1, group.index16[i + 1] + 1,
-                            group.index16[i + 2] + 1, group.index16[i + 2] + 1, group.index16[i + 2] + 1
-                    ));
-                }
-            }
+            if (group.index16 != null)
+                for (int i = 0; i < group.index16.length; i += 3)
+                    obj.append("f %s\n".formatted(applyFace(group.index16[i] + 1, group.index16[i + 1] + 1, group.index16[i + 2] + 1, normals, uvs)));
 
-            if (group.index32 != null) {
-                for (int i = 0; i < group.index32.length; i += 3) {
-                    obj.append("f %d/%d/%d %d/%d/%d %d/%d/%d\n".formatted(
-                            group.index32[i] + 1, group.index32[i] + 1, group.index32[i] + 1,
-                            group.index32[i + 1] + 1, group.index32[i + 1] + 1, group.index32[i + 1] + 1,
-                            group.index32[i + 2] + 1, group.index32[i + 2] + 1, group.index32[i + 2] + 1
-                    ));
-                }
-            }
+            if (group.index32 != null)
+                for (int i = 0; i < group.index32.length; i += 3)
+                    obj.append("f %s\n".formatted(applyFace(group.index32[i] + 1, group.index32[i + 1] + 1, group.index32[i + 2] + 1, normals, uvs)));
 
             mtl.append("newmtl %s\n".formatted(group.texture));
             mtl.append("map_Kd %s\n".formatted(group.texture));
         }
 
+        System.out.println("Saving files...");
         Files.write(folder.resolve("%s.obj".formatted(filename)), obj.toString().getBytes());
         Files.write(folder.resolve("%s.mtl".formatted(filename)), mtl.toString().getBytes());
     }
@@ -263,6 +281,18 @@ public class DXMConverter {
             dst[i] = (short) ((src[i * 2] & 0xFF) | ((src[i * 2 + 1] & 0xFF) << 8));
 
         return dst;
+    }
+
+    private static String applyFace(int x, int y, int z, boolean normals, boolean uvs) {
+        if (normals && uvs) {
+            return "%d/%d/%d %d/%d/%d %d/%d/%d".formatted(x, x, x, y, y, y, z, z, z);
+        } else if (normals) {
+            return "%d//%d %d//%d %d//%d".formatted(x, x, y, y, z, z);
+        } else if (uvs) {
+            return "%d/%d %d/%d %d/%d".formatted(x, x, y, y, z, z);
+        } else {
+            return "%s %d %d".formatted(x, y, z);
+        }
     }
 
 
