@@ -1,5 +1,6 @@
 package dxmconverter;
 
+import javax.swing.JOptionPane;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -12,39 +13,61 @@ import java.util.Locale;
 
 public class DXMConverter {
 
-    public static void main(String[] args) throws IOException {
-        if (args.length == 0)
+    private static final DecimalFormat df = new DecimalFormat("#.######", DecimalFormatSymbols.getInstance(Locale.US));
+    private static final float NORMALS_EPSILON = 1e-6f;
+
+    public static void main(String[] args) {
+        if (args.length == 0) {
+            showMessage("No file was given", JOptionPane.ERROR_MESSAGE);
             throw new RuntimeException("No file was given");
+        }
 
         String path = args[0];
-        if (!Files.exists(Path.of(path)))
+        if (!Files.exists(Path.of(path))) {
+            showMessage("File not found: " + path, JOptionPane.ERROR_MESSAGE);
             throw new RuntimeException("File not found: " + path);
+        }
 
         long start = System.currentTimeMillis();
-        System.out.println("Loading file: " + path);
+        logMessage("Loading file: " + path);
 
-        DXMModel model = loadDXM(path);
+        DXMModel model;
+        try {
+            model = loadDXM(path);
+        } catch (Exception e) {
+            showMessage("Failed to load DXM file\n" + e.getMessage(), JOptionPane.ERROR_MESSAGE);
+            throw new RuntimeException("Failed to load DXM file", e);
+        }
         long start2 = System.currentTimeMillis();
-        System.out.println("DXM model loaded in " + (start2 - start) + "ms");
+        logMessage("DXM model loaded in " + (start2 - start) + "ms");
 
         optimizeDXMModel(model);
         long start3 = System.currentTimeMillis();
-        System.out.println("DXM model optimized in " + (start3 - start2) + "ms");
+        logMessage("DXM model optimized in " + (start3 - start2) + "ms");
 
-        writeDXMasOBJ(model, path);
+        try {
+            writeDXMasOBJ(model, path);
+        } catch (Exception e) {
+            showMessage("Failed to write OBJ file\n" + e.getMessage(), JOptionPane.ERROR_MESSAGE);
+            throw new RuntimeException("Failed to write OBJ file", e);
+        }
         long start4 = System.currentTimeMillis();
-        System.out.println("OBJ file written in " + (start4 - start3) + "ms");
+        logMessage("OBJ file written in " + (start4 - start3) + "ms");
 
-        System.out.println("Done! (" + (start4 - start) + "ms) :3");
+        String msg = "Done! (" + (start4 - start) + "ms) :3";
+        logMessage(msg);
+        showMessage(msg, JOptionPane.INFORMATION_MESSAGE);
     }
 
     private static DXMModel loadDXM(String path) throws IOException {
-        System.out.println("## Loading DXM ##");
+        logMessage("## Loading DXM ##");
         boolean dxm = path.toLowerCase().endsWith(".dxm");
         Path dlmPath = Path.of(dxm ? path.substring(0, path.length() - 4) + ".dlm" : path);
 
-        if (!Files.exists(dlmPath) && dxm)
-            throw new RuntimeException("Unpacking of DXM files is not supported");
+        if (!Files.exists(dlmPath) && dxm) {
+            showMessage("Unpacking of DXM files is not yet supported", JOptionPane.ERROR_MESSAGE);
+            throw new RuntimeException("Unpacking of DXM files is not yet supported");
+        }
 
         DXMModel model = new DXMModel();
         model.header = new DXMHeader();
@@ -54,7 +77,7 @@ public class DXMConverter {
 
         int[] flags = validateHeader(model.header);
 
-        System.out.println("Loading DXM groups...");
+        logMessage("Loading DXM groups...");
         model.groups = new DXMGroup[model.header.groupCount];
         for (int i = 0; i < model.header.groupCount; i++) {
             model.groups[i] = new DXMGroup();
@@ -75,7 +98,7 @@ public class DXMConverter {
         int colcount = (int) model.header.vertexCount * 4 * Byte.BYTES;
 
         //vertex data
-        System.out.println("Loading DXM vertex data...");
+        logMessage("Loading DXM vertex data...");
         DXMData vertchunk = new DXMData();
         vertchunk.compressedSize = readUnsignedLong(in);
         vertchunk.uncompressedSize = readUnsignedLong(in);
@@ -90,7 +113,7 @@ public class DXMConverter {
         }
 
         //index data
-        System.out.println("Loading DXM index data...");
+        logMessage("Loading DXM index data...");
         DXMData indchunk = new DXMData();
         indchunk.compressedSize = readUnsignedLong(in);
         indchunk.uncompressedSize = readUnsignedLong(in);
@@ -108,7 +131,7 @@ public class DXMConverter {
     }
 
     private static void loadHeader(InputStream in, DXMHeader header) throws IOException {
-        System.out.println("Loading DXM header...");
+        logMessage("Loading DXM header...");
 
         header.nameCharacter0 = (byte) in.read();
         header.nameCharacter1 = (byte) in.read();
@@ -134,7 +157,7 @@ public class DXMConverter {
     }
 
     private static int[] validateHeader(DXMHeader header) {
-        System.out.println("Validating DXM header...");
+        logMessage("Validating DXM header...");
 
         int flagMesh = 0, flagPC = 0;
 
@@ -155,22 +178,22 @@ public class DXMConverter {
             throw new RuntimeException("Invalid file format of type: " + ident);
 
         if (header.majorVersion * 256 + header.minorVersion < 2 * 256 + 2)
-            throw new RuntimeException("Outdated loader.");
+            throw new RuntimeException("Outdated loader");
 
         if (header.encoding != DXMEncoding.DeInterleaved.ordinal())
-            throw new RuntimeException("Unsupported encoding.");
+            throw new RuntimeException("Unsupported encoding");
 
         if (header.compression != DXMCompression.NoCompression.ordinal())
-            throw new RuntimeException("Unsupported compression.");
+            throw new RuntimeException("Unsupported compression");
 
         if (header.vertexCompositionFlags != flagMesh && header.vertexCompositionFlags != flagPC)
-            throw new RuntimeException("Unsupported vertex format.");
+            throw new RuntimeException("Unsupported vertex format");
 
         return new int[]{flagMesh, flagPC};
     }
 
     private static void optimizeDXMModel(DXMModel model) {
-        System.out.println("## Optimizing DXM ##");
+        logMessage("## Optimizing DXM ##");
 
         boolean normal = model.normal != null;
         boolean uv = model.uv != null;
@@ -183,12 +206,12 @@ public class DXMConverter {
         ArrayList<Float> newNormalList = new ArrayList<>();
         ArrayList<Float> newUVList = new ArrayList<>();
 
-        System.out.println("Processing vertices...");
+        logMessage("Processing vertices...");
         for (int i = 0; i < model.vertex.length; i += 3) {
             float x = model.vertex[i];
             float y = model.vertex[i + 1];
             float z = model.vertex[i + 2];
-            String v = x + "," + y + "," + z;
+            String v = df.format(x) + " " + df.format(y) + " " + df.format(z);
             if (!vertexMap.containsKey(v)) {
                 vertexMap.put(v, newVertexList.size() / 3);
                 newVertexList.add(x);
@@ -198,27 +221,36 @@ public class DXMConverter {
         }
 
         if (normal) {
-            System.out.println("Processing normals...");
+            logMessage("Processing normals...");
+            boolean onlyZeroes = true;
             for (int i = 0; i < model.normal.length; i += 3) {
                 float x = model.normal[i];
                 float y = model.normal[i + 1];
                 float z = model.normal[i + 2];
-                String n = x + "," + y + "," + z;
+                String n = df.format(x) + " " + df.format(y) + " " + df.format(z);
                 if (!normalMap.containsKey(n)) {
                     normalMap.put(n, newNormalList.size() / 3);
                     newNormalList.add(x);
                     newNormalList.add(y);
                     newNormalList.add(z);
+                    if (onlyZeroes) {
+                        float magnitudeSq = x * x + y * y + z * z;
+                        onlyZeroes = magnitudeSq <= NORMALS_EPSILON;
+                    }
                 }
+            }
+            if (onlyZeroes) {
+                logMessage("All normals are effectively zero, ignoring...");
+                normal = false;
             }
         }
 
         if (uv) {
-            System.out.println("Processing UVs...");
+            logMessage("Processing UVs...");
             for (int i = 0; i < model.uv.length; i += 2) {
                 float u = model.uv[i];
                 float v = model.uv[i + 1];
-                String t = u + "," + v;
+                String t = df.format(u) + " " + df.format(v);
                 if (!uvMap.containsKey(t)) {
                     uvMap.put(t, newUVList.size() / 2);
                     newUVList.add(u);
@@ -227,12 +259,7 @@ public class DXMConverter {
             }
         }
 
-        if (vertexMap.size() == model.vertex.length / 3 && (!normal || normalMap.size() == model.normal.length / 3) && (!uv || uvMap.size() == model.uv.length / 2)) {
-            System.out.println("Model is already optimized");
-            return;
-        }
-
-        System.out.println("Updating model indices...");
+        logMessage("Updating model indices...");
         for (DXMGroup group : model.groups) {
             boolean index16 = group.index16 != null;
 
@@ -249,45 +276,49 @@ public class DXMConverter {
                 int index = index16 ? group.index16[i] : group.index32[i];
 
                 int vi = index * 3;
-                group.vi[i] = vertexMap.get(model.vertex[vi] + "," + model.vertex[vi + 1] + "," + model.vertex[vi + 2]);
+                group.vi[i] = vertexMap.get(df.format(model.vertex[vi]) + " " + df.format(model.vertex[vi + 1]) + " " + df.format(model.vertex[vi + 2]));
 
-                if (normal) {
-                    int ni = index * 3;
-                    group.ni[i] = normalMap.get(model.normal[ni] + "," + model.normal[ni + 1] + "," + model.normal[ni + 2]);
-                }
+                if (normal)
+                    group.ni[i] = normalMap.get(df.format(model.normal[vi]) + " " + df.format(model.normal[vi + 1]) + " " + df.format(model.normal[vi + 2]));
 
                 if (uv) {
                     int ti = index * 2;
-                    group.ti[i] = uvMap.get(model.uv[ti] + "," + model.uv[ti + 1]);
+                    group.ti[i] = uvMap.get(df.format(model.uv[ti]) + " " + df.format(model.uv[ti + 1]));
                 }
             }
         }
 
-        System.out.println("Updating model data...");
-        model.vertex = new float[newVertexList.size()];
-        for (int i = 0; i < newVertexList.size(); i++)
-            model.vertex[i] = newVertexList.get(i);
+        logMessage("Updating model data...");
+        model.v = new String[vertexMap.size()];
+        for (HashMap.Entry<String, Integer> entry : vertexMap.entrySet()) {
+            int i = entry.getValue();
+            model.v[i] = entry.getKey();
+        }
 
         if (normal) {
-            model.normal = new float[newNormalList.size()];
-            for (int i = 0; i < newNormalList.size(); i++)
-                model.normal[i] = newNormalList.get(i);
+            model.vn = new String[normalMap.size()];
+            for (HashMap.Entry<String, Integer> entry : normalMap.entrySet()) {
+                int i = entry.getValue();
+                model.vn[i] = entry.getKey();
+            }
         }
 
         if (uv) {
-            model.uv = new float[newUVList.size()];
-            for (int i = 0; i < newUVList.size(); i++)
-                model.uv[i] = newUVList.get(i);
+            model.vt = new String[uvMap.size()];
+            for (HashMap.Entry<String, Integer> entry : uvMap.entrySet()) {
+                int i = entry.getValue();
+                model.vt[i] = entry.getKey();
+            }
         }
     }
 
     private static void writeDXMasOBJ(DXMModel model, String path) throws IOException {
-        System.out.println("## Converting to OBJ ##");
+        logMessage("## Converting to OBJ ##");
         String rawPath = path.substring(0, path.length() - 4);
         String srcFolder = rawPath.substring(0, rawPath.lastIndexOf("\\") + 1);
         String filename = rawPath.substring(rawPath.lastIndexOf("\\") + 1);
 
-        System.out.println("Creating OBJ folder...");
+        logMessage("Creating OBJ folder...");
         Path folder = Path.of("./", filename);
         if (!Files.exists(folder)) {
             Files.createDirectory(folder);
@@ -309,28 +340,26 @@ public class DXMConverter {
         obj.append("mtllib %s\n".formatted(filename + ".mtl"));
         obj.append("o %s\n".formatted(filename));
 
-        boolean normals = model.normal != null;
-        boolean uvs = model.uv != null;
+        boolean normals = model.vn != null;
+        boolean uvs = model.vt != null;
 
-        DecimalFormat df = new DecimalFormat("#.######", DecimalFormatSymbols.getInstance(Locale.US));
-
-        System.out.println("Writing OBJ vertices...");
-        for (int i = 0; i < model.vertex.length; i += 3)
-            obj.append("v %s %s %s\n".formatted(df.format(model.vertex[i]), df.format(model.vertex[i + 1]), df.format(model.vertex[i + 2])));
+        logMessage("Writing OBJ vertices...");
+        for (int i = 0; i < model.v.length; i++)
+            obj.append("v ").append(model.v[i]).append("\n");
 
         if (normals) {
-            System.out.println("Writing OBJ normals...");
-            for (int i = 0; i < model.normal.length; i += 3)
-                obj.append("vn %s %s %s\n".formatted(df.format(model.normal[i]), df.format(model.normal[i + 1]), df.format(model.normal[i + 2])));
+            logMessage("Writing OBJ normals...");
+            for (int i = 0; i < model.vn.length; i++)
+                obj.append("vn ").append(model.vn[i]).append("\n");
         }
 
         if (uvs) {
-            System.out.println("Writing OBJ UVs...");
-            for (int i = 0; i < model.uv.length; i += 2)
-                obj.append("vt %s %s\n".formatted(df.format(model.uv[i]), df.format(model.uv[i + 1])));
+            logMessage("Writing OBJ UVs...");
+            for (int i = 0; i < model.vt.length; i++)
+                obj.append("vt ").append(model.vt[i]).append("\n");
         }
 
-        System.out.println("Writing OBJ groups and faces...");
+        logMessage("Writing OBJ groups and faces...");
         for (DXMGroup group : model.groups) {
             if (group.texture != null) {
                 Path texPath = Path.of(srcFolder, group.texture);
@@ -358,7 +387,7 @@ public class DXMConverter {
             mtl.append("map_Kd %s\n".formatted(group.texture));
         }
 
-        System.out.println("Saving files...");
+        logMessage("Saving files...");
         Files.write(folder.resolve("%s.obj".formatted(filename)), obj.toString().getBytes());
         Files.write(folder.resolve("%s.mtl".formatted(filename)), mtl.toString().getBytes());
     }
@@ -366,6 +395,14 @@ public class DXMConverter {
 
     // -- helpers -- //
 
+
+    private static void showMessage(String msg, int type) {
+        JOptionPane.showMessageDialog(null, msg, "DXM Converter", type);
+    }
+
+    private static void logMessage(String msg) {
+        System.out.println(msg);
+    }
 
     private static long readUnsignedLong(InputStream in) throws IOException {
         long value = 0;
@@ -497,8 +534,7 @@ public class DXMConverter {
     }
 
     private static class DXMGroup {
-        public long offset; //ulong
-        public long length; //ulong
+        public long offset, length; //ulong
         public String texture;
         public short[] index16;
         public int[] index32;
@@ -509,9 +545,9 @@ public class DXMConverter {
     private static class DXMModel {
         public DXMHeader header;
         public DXMGroup[] groups;
-        public float[] vertex;
-        public float[] normal;
-        public float[] uv;
+        public float[] vertex, normal, uv;
         public byte[] color;
+
+        public String[] v, vn, vt;
     }
 }
