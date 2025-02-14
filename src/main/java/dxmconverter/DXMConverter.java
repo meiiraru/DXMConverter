@@ -1,6 +1,13 @@
 package dxmconverter;
 
-import javax.swing.JOptionPane;
+import cinnamon.model.material.Material;
+import cinnamon.model.material.MaterialTexture;
+import cinnamon.model.obj.Face;
+import cinnamon.model.obj.Group;
+import cinnamon.model.obj.Mesh;
+import cinnamon.utils.Maths;
+import cinnamon.utils.Resource;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -9,65 +16,23 @@ import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+
+import static cinnamon.Client.LOGGER;
 
 public class DXMConverter {
 
     private static final DecimalFormat df = new DecimalFormat("#.######", DecimalFormatSymbols.getInstance(Locale.US));
     private static final float NORMALS_EPSILON = 1e-6f;
 
-    public static void main(String[] args) {
-        if (args.length == 0) {
-            showMessage("No file was given", JOptionPane.ERROR_MESSAGE);
-            throw new RuntimeException("No file was given");
-        }
-
-        String path = args[0];
-        if (!Files.exists(Path.of(path))) {
-            showMessage("File not found: " + path, JOptionPane.ERROR_MESSAGE);
-            throw new RuntimeException("File not found: " + path);
-        }
-
-        long start = System.currentTimeMillis();
-        logMessage("Loading file: " + path);
-
-        DXMModel model;
-        try {
-            model = loadDXM(path);
-        } catch (Exception e) {
-            showMessage("Failed to load DXM file\n" + e.getMessage(), JOptionPane.ERROR_MESSAGE);
-            throw new RuntimeException("Failed to load DXM file", e);
-        }
-        long start2 = System.currentTimeMillis();
-        logMessage("DXM model loaded in " + (start2 - start) + "ms");
-
-        optimizeDXMModel(model);
-        long start3 = System.currentTimeMillis();
-        logMessage("DXM model optimized in " + (start3 - start2) + "ms");
-
-        try {
-            writeDXMasOBJ(model, path);
-        } catch (Exception e) {
-            showMessage("Failed to write OBJ file\n" + e.getMessage(), JOptionPane.ERROR_MESSAGE);
-            throw new RuntimeException("Failed to write OBJ file", e);
-        }
-        long start4 = System.currentTimeMillis();
-        logMessage("OBJ file written in " + (start4 - start3) + "ms");
-
-        String msg = "Done! (" + (start4 - start) + "ms) :3";
-        logMessage(msg);
-        showMessage(msg, JOptionPane.INFORMATION_MESSAGE);
-    }
-
-    private static DXMModel loadDXM(String path) throws IOException {
+    public static DXMModel loadDXM(String path) throws IOException {
         logMessage("## Loading DXM ##");
         boolean dxm = path.toLowerCase().endsWith(".dxm");
         Path dlmPath = Path.of(dxm ? path.substring(0, path.length() - 4) + ".dlm" : path);
 
-        if (!Files.exists(dlmPath) && dxm) {
-            showMessage("Unpacking of DXM files is not yet supported", JOptionPane.ERROR_MESSAGE);
+        if (!Files.exists(dlmPath) && dxm)
             throw new RuntimeException("Unpacking of DXM files is not yet supported");
-        }
 
         DXMModel model = new DXMModel();
         model.header = new DXMHeader();
@@ -130,7 +95,7 @@ public class DXMConverter {
         return model;
     }
 
-    private static void loadHeader(InputStream in, DXMHeader header) throws IOException {
+    public static void loadHeader(InputStream in, DXMHeader header) throws IOException {
         logMessage("Loading DXM header...");
 
         header.nameCharacter0 = (byte) in.read();
@@ -156,7 +121,7 @@ public class DXMConverter {
         header.indexTableAddr = readUnsignedLong(in);
     }
 
-    private static int[] validateHeader(DXMHeader header) {
+    public static int[] validateHeader(DXMHeader header) {
         logMessage("Validating DXM header...");
 
         int flagMesh = 0, flagPC = 0;
@@ -192,7 +157,7 @@ public class DXMConverter {
         return new int[]{flagMesh, flagPC};
     }
 
-    private static void optimizeDXMModel(DXMModel model) {
+    public static void optimizeDXMModel(DXMModel model) {
         logMessage("## Optimizing DXM ##");
 
         boolean normal = model.normal != null;
@@ -312,96 +277,94 @@ public class DXMConverter {
         }
     }
 
-    private static void writeDXMasOBJ(DXMModel model, String path) throws IOException {
-        logMessage("## Converting to OBJ ##");
-        String rawPath = path.substring(0, path.length() - 4);
-        String srcFolder = rawPath.substring(0, rawPath.lastIndexOf("\\") + 1);
-        String filename = rawPath.substring(rawPath.lastIndexOf("\\") + 1);
-
-        logMessage("Creating OBJ folder...");
-        Path folder = Path.of("./", filename);
-        if (!Files.exists(folder)) {
-            Files.createDirectory(folder);
-        } else {
-            for (int i = 1; Files.exists(folder); i++)
-                folder = Path.of("./", filename + " (" + i + ")");
-            Files.createDirectory(folder);
-        }
-
-        StringBuilder obj = new StringBuilder();
-        StringBuilder mtl = new StringBuilder();
-
-        obj.append("# DXM to OBJ Converter\n");
-        obj.append("# Generated by Meii\n\n");
-
-        mtl.append("# DXM to OBJ Converter\n");
-        mtl.append("# Generated by Meii\n\n");
-
-        obj.append("mtllib %s\n".formatted(filename + ".mtl"));
-        obj.append("o %s\n".formatted(filename));
+    public static Mesh convertDXMtoOBJ(DXMModel model, String path) {
+        Mesh mesh = new Mesh();
 
         boolean normals = model.vn != null;
         boolean uvs = model.vt != null;
 
-        logMessage("Writing OBJ vertices...");
-        for (int i = 0; i < model.v.length; i++)
-            obj.append("v ").append(model.v[i]).append("\n");
+        //mesh values
+        for (String s : model.v) {
+            String[] v = s.split(" ");
+            mesh.getVertices().add(Maths.parseVec3(v[0], v[1], v[2]));
+        }
 
         if (normals) {
-            logMessage("Writing OBJ normals...");
-            for (int i = 0; i < model.vn.length; i++)
-                obj.append("vn ").append(model.vn[i]).append("\n");
+            for (String s : model.vn) {
+                String[] vn = s.split(" ");
+                mesh.getNormals().add(Maths.parseVec3(vn[0], vn[1], vn[2]));
+            }
         }
 
         if (uvs) {
-            logMessage("Writing OBJ UVs...");
-            for (int i = 0; i < model.vt.length; i++)
-                obj.append("vt ").append(model.vt[i]).append("\n");
-        }
-
-        logMessage("Writing OBJ groups and faces...");
-        for (DXMGroup group : model.groups) {
-            if (group.texture != null) {
-                Path texPath = Path.of(srcFolder, group.texture);
-                if (!Files.exists(texPath))
-                    texPath = Path.of(srcFolder, "Textures", group.texture);
-                if (Files.exists(texPath))
-                    Files.copy(texPath, folder.resolve(group.texture));
+            for (String s : model.vt) {
+                String[] vt = s.split(" ");
+                mesh.getUVs().add(Maths.parseVec2(vt[0], vt[1]));
             }
-
-            obj.append("usemtl %s\n".formatted(group.texture));
-
-            if (group.vi != null)
-                for (int i = 0; i < group.vi.length; i += 3)
-                    obj.append("f %s\n".formatted(applyFace(group, i, normals, uvs)));
-
-            else if (group.index16 != null)
-                for (int i = 0; i < group.index16.length; i += 3)
-                    obj.append("f %s\n".formatted(applyFace(group.index16[i] + 1, group.index16[i + 1] + 1, group.index16[i + 2] + 1, normals, uvs)));
-
-            else if (group.index32 != null)
-                for (int i = 0; i < group.index32.length; i += 3)
-                    obj.append("f %s\n".formatted(applyFace(group.index32[i] + 1, group.index32[i + 1] + 1, group.index32[i + 2] + 1, normals, uvs)));
-
-            mtl.append("newmtl %s\n".formatted(group.texture));
-            mtl.append("map_Kd %s\n".formatted(group.texture));
         }
 
-        logMessage("Saving files...");
-        Files.write(folder.resolve("%s.obj".formatted(filename)), obj.toString().getBytes());
-        Files.write(folder.resolve("%s.mtl".formatted(filename)), mtl.toString().getBytes());
+        //groups
+        Path folder = Path.of(path).getParent();
+        for (DXMGroup group : model.groups) {
+            if (group.texture == null)
+                continue;
+
+            String texture = group.texture.replaceAll("\\\\", "/");
+            texture = texture.substring(texture.lastIndexOf("/") + 1);
+
+            Group g = new Group(texture);
+            mesh.getGroups().add(g);
+
+            //material
+            Material m = new Material(texture);
+            g.setMaterial(m);
+            mesh.getMaterials().put(texture, m);
+
+            //texture
+            Resource res = null;
+            Path texPath = folder.resolve(texture);
+            if (!Files.exists(texPath))
+                texPath = folder.resolve("Textures").resolve(texture);
+            if (Files.exists(texPath))
+                res = new Resource("", texPath.toString());
+            m.setAlbedo(res == null ? null : new MaterialTexture(res, false, false));
+
+            //faces
+            if (group.vi != null)
+                for (int i = 0; i < group.vi.length; i += 3) {
+                    List<Integer>
+                            vi = new ArrayList<>(),
+                            vt = new ArrayList<>(),
+                            vn = new ArrayList<>();
+                    g.getFaces().add(new Face(vi, vt, vn));
+
+                    vi.add(group.vi[i]);
+                    vi.add(group.vi[i + 1]);
+                    vi.add(group.vi[i + 2]);
+
+                    if (uvs) {
+                        vt.add(group.ti[i]);
+                        vt.add(group.ti[i + 1]);
+                        vt.add(group.ti[i + 2]);
+                    }
+
+                    if (normals) {
+                        vn.add(group.ni[i]);
+                        vn.add(group.ni[i + 1]);
+                        vn.add(group.ni[i + 2]);
+                    }
+                }
+        }
+
+        return mesh;
     }
 
 
     // -- helpers -- //
 
 
-    private static void showMessage(String msg, int type) {
-        JOptionPane.showMessageDialog(null, msg, "DXM Converter", type);
-    }
-
     private static void logMessage(String msg) {
-        System.out.println(msg);
+        LOGGER.info(msg);
     }
 
     private static long readUnsignedLong(InputStream in) throws IOException {
@@ -464,10 +427,6 @@ public class DXMConverter {
         }
     }
 
-    private static String applyFace(int x, int y, int z, boolean normals, boolean uvs) {
-        return applyFace(x, y, z, x, y, z, x, y, z, normals, uvs);
-    }
-
     private static String applyFace(DXMGroup group, int index, boolean normals, boolean uvs) {
         int x = group.vi[index] + 1;
         int y = group.vi[index + 1] + 1;
@@ -488,7 +447,7 @@ public class DXMConverter {
     // -- structure -- //
 
 
-    private static class DXMHeader {
+    public static class DXMHeader {
         public byte nameCharacter0, nameCharacter1, nameCharacter2, nameCharacter3;
 
         public byte majorVersion, minorVersion;
@@ -505,18 +464,18 @@ public class DXMConverter {
         public long vertexTableAddr, indexTableAddr; //ulong
     }
 
-    private enum DXMEncoding {
+    public enum DXMEncoding {
         Inteleaved,
         DeInterleaved,
         BytePack
     }
 
-    private enum DXMCompression {
+    public enum DXMCompression {
         NoCompression,
         LZ77
     }
 
-    private enum DXMVertexFlag {
+    public enum DXMVertexFlag {
         Vertex_3_F32(1),
         Normal_3_F32(1 << 1),
         Texcoord_2_F32(1 << 2),
@@ -529,11 +488,11 @@ public class DXMConverter {
         }
     }
 
-    private static class DXMData {
+    public static class DXMData {
         public long compressedSize, uncompressedSize; //ulong
     }
 
-    private static class DXMGroup {
+    public static class DXMGroup {
         public long offset, length; //ulong
         public String texture;
         public short[] index16;
@@ -542,7 +501,7 @@ public class DXMConverter {
         public int[] vi, ni, ti;
     }
 
-    private static class DXMModel {
+    public static class DXMModel {
         public DXMHeader header;
         public DXMGroup[] groups;
         public float[] vertex, normal, uv;
